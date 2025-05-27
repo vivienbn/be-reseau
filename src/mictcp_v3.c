@@ -1,6 +1,9 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
+#include <stdbool.h>
 #define TABMAX 1000
+#define MAXTIMEOUT 100
+#define NUM_SEQ_INIT 0
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -8,7 +11,7 @@
 
 
 
-
+int num_seq = NUM_SEQ_INIT;
 int fd_compteur =0;
 struct mic_tcp_sock tab[TABMAX]; //on met 1000 de manière arbitraire pour l'instant
 
@@ -66,14 +69,31 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
  * Permet de réclamer l’envoi d’une donnée applicative
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
+
 int mic_tcp_send (int mic_sock, char* msg, int msg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    mic_tcp_pdu pdu;
-    pdu.payload.data = msg;
-    pdu.payload.size = msg_size;
-    pdu.header.dest_port =  tab[mic_sock].remote_addr.port;
-    int sent_data = IP_send(pdu, tab[mic_sock].remote_addr.ip_addr);
+    
+    struct mic_tcp_pdu pk;
+    pk.payload.size = 0;
+    struct mic_tcp_ip_addr remote_addr;
+    struct mic_tcp_ip_addr local_addr;
+    struct mic_tcp_pdu* pdu = malloc(sizeof(struct mic_tcp_pdu));
+
+    pdu->header.dest_port =  tab[mic_sock].remote_addr.port;
+    pdu->header.seq_num = num_seq;
+    pdu->payload.data = msg;
+    pdu->payload.size = msg_size;
+    int sent_data = IP_send(*pdu, tab[mic_sock].remote_addr.ip_addr);
+    bool isvalid = false; 
+    while(!isvalid){
+        int recv = IP_recv(&pk,&local_addr,&remote_addr,100);
+        if(recv != -1 && pk.header.ack==1 && pk.header.ack_num == num_seq){
+            isvalid = true;
+        }
+        sent_data = IP_send(*pdu, tab[mic_sock].remote_addr.ip_addr);
+    }
+    num_seq = (num_seq + 1)%2;
     return sent_data;
 }
 
@@ -90,6 +110,7 @@ int mic_tcp_recv (int socket, char* msg, int max_msg_size)
     payload.data = msg;
     payload.size = max_msg_size;
     int wrote = app_buffer_get(payload);
+
     return wrote;
 }
 
@@ -115,4 +136,11 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     app_buffer_put(pdu.payload);
+
+    struct mic_tcp_pdu pduAck;
+    printf("num_seq : %d\n", pdu.header.seq_num);
+    pduAck.header.ack_num = pdu.header.seq_num;
+    pduAck.header.ack = 1;
+    pduAck.header.syn = 0;
+    int sent_data = IP_send(pduAck, remote_addr);
 }
