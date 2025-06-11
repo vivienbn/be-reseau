@@ -4,24 +4,34 @@
 #define TABMAX 1000
 #define MAXTIMEOUT 100
 #define NUM_SEQ_INIT 0
+#define PERCENT_LOSS 5
+#define MAX_PERCENT 100
+#define BUFFER_SIZE 100
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
  */
 
-
-
 int num_seq = NUM_SEQ_INIT;
-int fd_compteur =0;
+int fd_compteur = 0;
+int id_send = 0;
+int buffer_lost [BUFFER_SIZE];
 struct mic_tcp_sock tab[TABMAX]; //on met 1000 de manière arbitraire pour l'instant
 
+bool needToSend(){
+    int nb_loss = 0;
+    for(int i = 0; i < BUFFER_SIZE; i++){
+        nb_loss += buffer_lost[i];
+    }
+    return ((float)nb_loss/BUFFER_SIZE)*MAX_PERCENT > PERCENT_LOSS;
+}
 
 int mic_tcp_socket(start_mode sm)
 {
    struct mic_tcp_sock mysock;  
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    int result = initialize_components(sm);
-   set_loss_rate(0);
+   set_loss_rate(10);
    mysock.fd = fd_compteur;
    fd_compteur +=1;
    mysock.state = IDLE;
@@ -85,13 +95,23 @@ int mic_tcp_send (int mic_sock, char* msg, int msg_size)
     pdu->payload.data = msg;
     pdu->payload.size = msg_size;
     int sent_data = IP_send(*pdu, tab[mic_sock].remote_addr.ip_addr);
-    bool isvalid = false; 
-    while(!isvalid){
-        int recv = IP_recv(&pk,&local_addr,&remote_addr,100);
-        if(recv != -1 && pk.header.ack==1 && pk.header.ack_num == num_seq){
-            isvalid = true;
+    id_send = (id_send + 1)%BUFFER_SIZE;
+
+    int recv = IP_recv(&pk,&local_addr,&remote_addr,100);
+    if(recv != -1 && pk.header.ack == 1 && pk.header.ack_num == num_seq){
+        buffer_lost[id_send] = 0;
+    } else {
+        buffer_lost[id_send] = 1;
+        if(needToSend()){
+            while(1){
+                int recv = IP_recv(&pk,&local_addr,&remote_addr,100);
+                if(recv != -1 && pk.header.ack==1 && pk.header.ack_num == num_seq){
+                    break;
+                }
+                sent_data = IP_send(*pdu, tab[mic_sock].remote_addr.ip_addr);
+            }
+            buffer_lost[id_send] = 0;
         }
-        sent_data = IP_send(*pdu, tab[mic_sock].remote_addr.ip_addr);
     }
     num_seq = (num_seq + 1)%2;
     return sent_data;
@@ -144,3 +164,4 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     pduAck.header.syn = 0;
     int sent_data = IP_send(pduAck, remote_addr);
 }
+
